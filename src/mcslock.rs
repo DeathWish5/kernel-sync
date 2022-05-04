@@ -13,15 +13,10 @@ pub enum LockChannel {
 }
 
 pub struct MCSLock<T: ?Sized> {
-    // phantom: PhantomData<R>,
     pub(crate) locked: [AtomicBool; 2],
     data: UnsafeCell<T>,
 }
 
-/// An RAII implementation of a “scoped lock” of a mutex.
-/// When this structure is dropped (falls out of scope),
-/// the lock will be unlocked.
-///
 pub struct MCSLockGuard<'a, T: ?Sized + 'a> {
     mcslock: &'a MCSLock<T>,
     data: &'a mut T,
@@ -37,7 +32,6 @@ impl<T> MCSLock<T> {
         MCSLock {
             locked: [AtomicBool::new(false), AtomicBool::new(false)], // TODO: remove hardcode
             data: UnsafeCell::new(data),
-            // cpuid: 0,
         }
     }
 

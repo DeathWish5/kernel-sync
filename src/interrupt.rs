@@ -41,12 +41,16 @@ cfg_if::cfg_if! {
             }
         }
     } else {
-        mod interrupts {
+        pub(super) mod interrupts {
             pub(crate) fn cpu_id() -> u8 {
                 unimplemented!();
             }
-            pub(crate) fn intr_on() { unimplemented!(); }
-            pub(crate) fn intr_off() { unimplemented!(); }
+            pub(crate) fn intr_on() {
+                unimplemented!();
+            }
+            pub(crate) fn intr_off() {
+                unimplemented!();
+            }
             pub(crate) fn intr_get() -> bool {
                 unimplemented!();
             }

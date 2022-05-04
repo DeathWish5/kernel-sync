@@ -6,7 +6,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::interrupt::{pop_off, push_off};
+use super::{pop_off, push_off};
 
 pub struct TicketMutex<T: ?Sized> {
     next_ticket: AtomicUsize,

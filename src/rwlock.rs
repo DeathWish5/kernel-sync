@@ -10,7 +10,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::interrupt::{pop_off, push_off};
+use super::{pop_off, push_off};
 
 pub struct RwLock<T: ?Sized> {
     lock: AtomicUsize,

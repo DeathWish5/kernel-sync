@@ -6,7 +6,7 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use crate::interrupt::{pop_off, push_off};
+use super::{pop_off, push_off};
 
 pub struct SpinMutex<T: ?Sized> {
     locked: AtomicBool,

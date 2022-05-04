@@ -1,22 +1,42 @@
 #![no_std]
+#![feature(get_mut_unchecked)]
 
-cfg_if::cfg_if! {
-    if #[cfg(all(target_os = "none", feature = "ticket"))] {
-        extern crate alloc;
-        mod interrupt;
+use cfg_if::cfg_if;
+
+extern crate alloc;
+
+mod interrupt;
+
+cfg_if! {
+    if #[cfg(target_os = "none")] {
+        pub(crate) use interrupt::{push_off, pop_off};
+    } else {
+        pub mod mock {
+            pub(crate) fn push_off() {}
+            pub(crate) fn pop_off() {}
+        }
+        pub(crate) use mock::{push_off, pop_off};
+    }
+}
+
+pub mod binary_semaphore;
+pub mod futurelock;
+pub use {binary_semaphore::*, futurelock::*};
+
+cfg_if! {
+    if #[cfg(target_os = "none")] {
         pub mod mcslock;
         pub mod rwlock;
         pub use {rwlock::*, mcslock::*};
-        pub mod ticket;
-        pub use ticket::{TicketMutex as Mutex, TicketMutexGuard as MutexGuard};
-    } else if #[cfg(target_os = "none")] {
-        extern crate alloc;
-        mod interrupt;
-        pub mod mcslock;
-        pub mod rwlock;
-        pub use {rwlock::*, mcslock::*};
-        pub mod spin;
-        pub use spin::{SpinMutex as Mutex, SpinMutexGuard as MutexGuard};
+        cfg_if! {
+            if #[cfg(feature = "ticket")] {
+                pub mod ticket;
+                pub use ticket::{TicketMutex as Mutex, TicketMutexGuard as MutexGuard};
+            } else {
+                pub mod spin;
+                pub use spin::{SpinMutex as Mutex, SpinMutexGuard as MutexGuard};
+            }
+        }
     } else {
         pub use spin::*;
     }

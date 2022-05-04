@@ -19,8 +19,14 @@ x86_64 = "0.14.6"
 
 # Bare-metal mode on riscv64
 [target.'cfg(target_arch = "riscv64")'.dependencies]
-riscv = { git = "https://github.com/rust-embedded/riscv", rev = "cd31989ba1", features = ["inline-asm"] }
+riscv = { git = "https://github.com/rust-embedded/riscv", rev = "cd31989", features = ["inline-asm"] }
 
 # LibOS mode
 [target.'cfg(not(target_os = "none"))'.dependencies]
 spin = "0.9"
+
+[target.'cfg(feature = "async")'.dependencies]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+lazy_static = "1.4"

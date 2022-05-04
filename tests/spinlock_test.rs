@@ -1,11 +1,9 @@
-extern crate alloc;
-use alloc::sync::Arc;
-use alloc::vec;
-use kernel_sync::mutex::Mutex;
+use lock::Mutex;
+use std::{sync::Arc, vec};
 
 #[test]
 fn basic_test() {
-    let x = Arc::new(SpinLock::new(0));
+    let x = Arc::new(Mutex::new(0));
     let thread_cnt = 3;
     let loop_cnt = 1000000;
     let mut threads = vec![];
@@ -26,7 +24,7 @@ fn basic_test() {
 
 #[test]
 fn try_lock_test() {
-    let x = Arc::new(SpinLock::new(0));
+    let x = Arc::new(Mutex::new(0));
     let lock_result0 = x.try_lock();
     assert!(lock_result0.is_some());
 
