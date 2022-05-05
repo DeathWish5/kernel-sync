@@ -1,4 +1,4 @@
-use crate::binary_semaphore::*;
+use crate::rw_semaphore::RwSemaphore as Semaphore;
 
 use core::{
     cell::UnsafeCell,
@@ -6,8 +6,6 @@ use core::{
     fmt,
     ops::{Deref, DerefMut},
 };
-
-use super::{pop_off, push_off};
 
 pub struct FutureMutex<T: ?Sized> {
     locked: Semaphore,
@@ -49,17 +47,14 @@ impl<T> FutureMutex<T> {
 
 impl<T: ?Sized> FutureMutex<T> {
     pub async fn lock(&self) -> FutureMutexGuard<'_, T> {
-        push_off();
-        self.locked.acquire().await;
+        self.locked.acquire_write().await;
         FutureMutexGuard { lock: self }
     }
 
     pub fn try_lock(&self) -> Option<FutureMutexGuard<T>> {
-        push_off();
-        if self.locked.try_acquire().is_ok() {
+        if self.locked.try_acquire_write().is_ok() {
             Some(FutureMutexGuard { lock: self })
         } else {
-            pop_off();
             None
         }
     }
@@ -73,7 +68,7 @@ impl<T: ?Sized> FutureMutex<T> {
 
     #[inline(always)]
     pub fn is_locked(&self) -> bool {
-        self.locked.get_permit()
+        self.locked.get_permit() != 0
     }
 }
 
@@ -103,8 +98,7 @@ impl<T> From<T> for FutureMutex<T> {
 impl<'a, T: ?Sized> Drop for FutureMutexGuard<'a, T> {
     /// The dropping of the FutureMutexGuard will release the lock it was created from.
     fn drop(&mut self) {
-        self.lock.locked.release();
-        pop_off();
+        self.lock.locked.release_write();
     }
 }
 

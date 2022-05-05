@@ -19,9 +19,10 @@ cfg_if! {
     }
 }
 
-pub mod binary_semaphore;
-pub mod futurelock;
-pub use {binary_semaphore::*, futurelock::*};
+pub mod future_mutex;
+pub mod future_rwlock;
+pub mod rw_semaphore;
+pub use {future_mutex::*, future_rwlock::*, rw_semaphore::*};
 
 cfg_if! {
     if #[cfg(target_os = "none")] {

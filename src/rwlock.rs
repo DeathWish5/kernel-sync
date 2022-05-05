@@ -34,7 +34,6 @@ pub struct RwLockReadGuard<'a, T: 'a + ?Sized> {
 ///
 /// When the guard falls out of scope it will release the lock.
 pub struct RwLockWriteGuard<'a, T: 'a + ?Sized> {
-    // phantom: PhantomData<R>,
     inner: &'a RwLock<T>,
     data: &'a mut T,
 }

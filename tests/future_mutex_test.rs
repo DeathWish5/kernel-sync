@@ -1,4 +1,4 @@
-use lock::futurelock::FutureMutex as Mutex;
+use lock::future_mutex::FutureMutex as Mutex;
 use std::{sync::Arc, vec};
 // use tokio::task::{yield_now, JoinSet};
 
