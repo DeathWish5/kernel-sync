@@ -59,6 +59,15 @@ impl<T: ?Sized> FutureMutex<T> {
         }
     }
 
+    pub fn spin_lock(&self) -> FutureMutexGuard<T> {
+        loop {
+            match self.try_lock() {
+                Some(guard) => return guard,
+                None => core::hint::spin_loop(),
+            }
+        }
+    }
+
     #[inline(always)]
     pub fn get_mut(&mut self) -> &mut T {
         // We know statically that there are no other references to `self`, so

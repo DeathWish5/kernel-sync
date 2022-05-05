@@ -84,6 +84,15 @@ impl<T: ?Sized> FutureRwLock<T> {
         }
     }
 
+    pub fn spin_read(&self) -> FutureRwLockReadGuard<T> {
+        loop {
+            match self.try_read() {
+                Some(guard) => return guard,
+                None => core::hint::spin_loop(),
+            }
+        }
+    }
+
     #[inline(always)]
     fn try_write(&self) -> Option<FutureRwLockWriteGuard<T>> {
         if self.lock.try_acquire_write().is_ok() {
@@ -93,6 +102,15 @@ impl<T: ?Sized> FutureRwLock<T> {
             })
         } else {
             None
+        }
+    }
+
+    pub fn spin_write(&self) -> FutureRwLockWriteGuard<T> {
+        loop {
+            match self.try_write() {
+                Some(guard) => return guard,
+                None => core::hint::spin_loop(),
+            }
         }
     }
 

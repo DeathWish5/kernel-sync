@@ -7,7 +7,7 @@ edition = "2018"
 
 [features]
 default = ["ticket"]
-ticket = ["spin/use_ticket_mutex"]
+ticket = []
 
 [dependencies]
 cfg-if = "1.0.0"
