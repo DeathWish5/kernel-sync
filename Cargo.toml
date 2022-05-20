@@ -19,7 +19,7 @@ x86_64 = "0.14.6"
 
 # Bare-metal mode on riscv64
 [target.'cfg(target_arch = "riscv64")'.dependencies]
-riscv = { git = "https://github.com/rust-embedded/riscv", rev = "cd31989", features = ["inline-asm"] }
+riscv = "0.8"
 
 # LibOS mode
 [target.'cfg(not(target_os = "none"))'.dependencies]

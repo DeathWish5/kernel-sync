@@ -1,9 +1,12 @@
 use core::{
     cell::UnsafeCell,
     fmt,
+    marker::PhantomData,
     ops::{Deref, DerefMut},
     sync::atomic::{AtomicBool, Ordering},
 };
+
+use crate::NestStrategy as IN;
 
 #[repr(usize)]
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -12,24 +15,27 @@ pub enum LockChannel {
     Interrupt = 1,
 }
 
-pub struct MCSLock<T: ?Sized> {
+pub struct MCSLock<T: ?Sized, N: IN> {
+    phantom: PhantomData<N>,
     pub(crate) locked: [AtomicBool; 2],
     data: UnsafeCell<T>,
 }
 
-pub struct MCSLockGuard<'a, T: ?Sized + 'a> {
-    mcslock: &'a MCSLock<T>,
+pub struct MCSLockGuard<'a, T: ?Sized, N: IN> {
+    phantom: PhantomData<N>,
+    mcslock: &'a MCSLock<T, N>,
     data: &'a mut T,
     channel: LockChannel,
 }
 
-unsafe impl<T: ?Sized + Send> Sync for MCSLock<T> {}
-unsafe impl<T: ?Sized + Send> Send for MCSLock<T> {}
+unsafe impl<N: IN, T: ?Sized + Send> Sync for MCSLock<T, N> {}
+unsafe impl<N: IN, T: ?Sized + Send> Send for MCSLock<T, N> {}
 
-impl<T> MCSLock<T> {
+impl<T, N: IN> MCSLock<T, N> {
     #[inline(always)]
     pub const fn new(data: T) -> Self {
         MCSLock {
+            phantom: PhantomData,
             locked: [AtomicBool::new(false), AtomicBool::new(false)], // TODO: remove hardcode
             data: UnsafeCell::new(data),
         }
@@ -49,9 +55,9 @@ impl<T> MCSLock<T> {
     }
 }
 
-impl<T: ?Sized> MCSLock<T> {
+impl<T: ?Sized, N: IN> MCSLock<T, N> {
     #[inline(always)]
-    pub fn lock(&self, channel: LockChannel) -> MCSLockGuard<T> {
+    pub fn lock(&self, channel: LockChannel) -> MCSLockGuard<T, N> {
         while self.locked[channel as usize]
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
@@ -63,6 +69,7 @@ impl<T: ?Sized> MCSLock<T> {
         }
 
         MCSLockGuard {
+            phantom: PhantomData,
             mcslock: self,
             data: unsafe { &mut *self.data.get() },
             channel,
@@ -70,12 +77,13 @@ impl<T: ?Sized> MCSLock<T> {
     }
 
     #[inline(always)]
-    pub fn try_lock(&self, channel: LockChannel) -> Option<MCSLockGuard<T>> {
+    pub fn try_lock(&self, channel: LockChannel) -> Option<MCSLockGuard<T, N>> {
         if self.locked[channel as usize]
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
             Some(MCSLockGuard {
+                phantom: PhantomData,
                 mcslock: self,
                 data: unsafe { &mut *self.data.get() },
                 channel,
@@ -98,33 +106,33 @@ impl<T: ?Sized> MCSLock<T> {
     }
 }
 
-impl<'a, T: ?Sized + fmt::Display> fmt::Display for MCSLockGuard<'a, T> {
+impl<'a, T: ?Sized + fmt::Display, N: IN> fmt::Display for MCSLockGuard<'a, T, N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&**self, f)
     }
 }
 
-impl<'a, T: ?Sized> Deref for MCSLockGuard<'a, T> {
+impl<'a, T: ?Sized, N: IN> Deref for MCSLockGuard<'a, T, N> {
     type Target = T;
     fn deref(&self) -> &T {
         self.data
     }
 }
 
-impl<'a, T: ?Sized> DerefMut for MCSLockGuard<'a, T> {
+impl<'a, T: ?Sized, N: IN> DerefMut for MCSLockGuard<'a, T, N> {
     fn deref_mut(&mut self) -> &mut T {
         self.data
     }
 }
 
-impl<'a, T: ?Sized> Drop for MCSLockGuard<'a, T> {
+impl<'a, T: ?Sized, N: IN> Drop for MCSLockGuard<'a, T, N> {
     /// The dropping of the MutexGuard will release the lock it was created from.
     fn drop(&mut self) {
         self.mcslock.locked[self.channel as usize].store(false, Ordering::Release);
     }
 }
 
-impl<T: ?Sized> fmt::Display for MCSLock<T> {
+impl<T: ?Sized, N: IN> fmt::Display for MCSLock<T, N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,

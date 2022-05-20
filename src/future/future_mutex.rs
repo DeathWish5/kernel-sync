@@ -4,11 +4,15 @@ use core::{
     cell::UnsafeCell,
     default::Default,
     fmt,
+    marker::PhantomData,
     ops::{Deref, DerefMut},
 };
 
-pub struct FutureMutex<T: ?Sized> {
-    locked: Semaphore,
+use crate::NestStrategy as IN;
+
+pub struct FutureMutex<T: ?Sized, N: IN> {
+    phantom: PhantomData<N>,
+    locked: Semaphore<N>,
     data: UnsafeCell<T>,
 }
 
@@ -16,18 +20,20 @@ pub struct FutureMutex<T: ?Sized> {
 /// When this structure is dropped (falls out of scope),
 /// the lock will be unlocked.
 ///
-pub struct FutureMutexGuard<'a, T: ?Sized + 'a> {
-    lock: &'a FutureMutex<T>,
+pub struct FutureMutexGuard<'a, T: ?Sized, N: IN> {
+    phantom: PhantomData<N>,
+    lock: &'a FutureMutex<T, N>,
 }
 
-unsafe impl<T: ?Sized + Send> Sync for FutureMutex<T> {}
-unsafe impl<T: ?Sized + Send> Send for FutureMutex<T> {}
+unsafe impl<N: IN, T: ?Sized + Send> Sync for FutureMutex<T, N> {}
+unsafe impl<N: IN, T: ?Sized + Send> Send for FutureMutex<T, N> {}
 
-impl<T> FutureMutex<T> {
+impl<T, N: IN> FutureMutex<T, N> {
     #[inline(always)]
     pub fn new(data: T) -> Self {
-        FutureMutex {
-            locked: Semaphore::new(),
+        FutureMutex::<T, N> {
+            phantom: PhantomData,
+            locked: Semaphore::<N>::new(),
             data: UnsafeCell::new(data),
         }
     }
@@ -45,21 +51,27 @@ impl<T> FutureMutex<T> {
     }
 }
 
-impl<T: ?Sized> FutureMutex<T> {
-    pub async fn lock(&self) -> FutureMutexGuard<'_, T> {
+impl<T: ?Sized, N: IN> FutureMutex<T, N> {
+    pub async fn lock(&self) -> FutureMutexGuard<'_, T, N> {
         self.locked.acquire_write().await;
-        FutureMutexGuard { lock: self }
+        FutureMutexGuard {
+            phantom: PhantomData,
+            lock: self,
+        }
     }
 
-    pub fn try_lock(&self) -> Option<FutureMutexGuard<T>> {
+    pub fn try_lock(&self) -> Option<FutureMutexGuard<T, N>> {
         if self.locked.try_acquire_write().is_ok() {
-            Some(FutureMutexGuard { lock: self })
+            Some(FutureMutexGuard {
+                phantom: PhantomData,
+                lock: self,
+            })
         } else {
             None
         }
     }
 
-    pub fn spin_lock(&self) -> FutureMutexGuard<T> {
+    pub fn spin_lock(&self) -> FutureMutexGuard<T, N> {
         loop {
             match self.try_lock() {
                 Some(guard) => return guard,
@@ -81,7 +93,7 @@ impl<T: ?Sized> FutureMutex<T> {
     }
 }
 
-impl<T: ?Sized + fmt::Debug> fmt::Debug for FutureMutex<T> {
+impl<T: ?Sized + fmt::Debug, N: IN> fmt::Debug for FutureMutex<T, N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.try_lock() {
             Some(guard) => write!(f, "Mutex {{ data: ")
@@ -92,45 +104,45 @@ impl<T: ?Sized + fmt::Debug> fmt::Debug for FutureMutex<T> {
     }
 }
 
-impl<T: ?Sized + Default> Default for FutureMutex<T> {
+impl<T: ?Sized + Default, N: IN> Default for FutureMutex<T, N> {
     fn default() -> Self {
         FutureMutex::new(T::default())
     }
 }
 
-impl<T> From<T> for FutureMutex<T> {
+impl<T, N: IN> From<T> for FutureMutex<T, N> {
     fn from(data: T) -> Self {
         Self::new(data)
     }
 }
 
-impl<'a, T: ?Sized> Drop for FutureMutexGuard<'a, T> {
+impl<'a, T: ?Sized, N: IN> Drop for FutureMutexGuard<'a, T, N> {
     /// The dropping of the FutureMutexGuard will release the lock it was created from.
     fn drop(&mut self) {
         self.lock.locked.release_write();
     }
 }
 
-impl<'a, T: ?Sized> Deref for FutureMutexGuard<'a, T> {
+impl<'a, T: ?Sized, N: IN> Deref for FutureMutexGuard<'a, T, N> {
     type Target = T;
     fn deref(&self) -> &T {
         unsafe { &*self.lock.data.get() }
     }
 }
 
-impl<'a, T: ?Sized> DerefMut for FutureMutexGuard<'a, T> {
+impl<'a, T: ?Sized, N: IN> DerefMut for FutureMutexGuard<'a, T, N> {
     fn deref_mut(&mut self) -> &mut T {
         unsafe { &mut *self.lock.data.get() }
     }
 }
 
-impl<'a, T: ?Sized + fmt::Debug> fmt::Debug for FutureMutexGuard<'a, T> {
+impl<'a, T: ?Sized + fmt::Debug, N: IN> fmt::Debug for FutureMutexGuard<'a, T, N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
 
-impl<'a, T: ?Sized + fmt::Display> fmt::Display for FutureMutexGuard<'a, T> {
+impl<'a, T: ?Sized + fmt::Display, N: IN> fmt::Display for FutureMutexGuard<'a, T, N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&**self, f)
     }

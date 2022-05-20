@@ -2,13 +2,15 @@ use core::{
     cell::UnsafeCell,
     default::Default,
     fmt,
+    marker::PhantomData,
     ops::{Deref, DerefMut},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use super::{pop_off, push_off};
+use crate::NestStrategy as IN;
 
-pub struct TicketMutex<T: ?Sized> {
+pub struct TicketMutex<T: ?Sized, N: IN> {
+    phantom: PhantomData<N>,
     next_ticket: AtomicUsize,
     next_serving: AtomicUsize,
     data: UnsafeCell<T>,
@@ -18,19 +20,21 @@ pub struct TicketMutex<T: ?Sized> {
 /// When this structure is dropped (falls out of scope),
 /// the lock will be unlocked.
 ///
-pub struct TicketMutexGuard<'a, T: ?Sized + 'a> {
+pub struct TicketMutexGuard<'a, T: ?Sized + 'a, N: IN> {
+    phantom: PhantomData<N>,
     next_serving: &'a AtomicUsize,
     ticket: usize,
     data: &'a mut T,
 }
 
-unsafe impl<T: ?Sized + Send> Sync for TicketMutex<T> {}
-unsafe impl<T: ?Sized + Send> Send for TicketMutex<T> {}
+unsafe impl<N: IN, T: ?Sized + Send> Sync for TicketMutex<T, N> {}
+unsafe impl<N: IN, T: ?Sized + Send> Send for TicketMutex<T, N> {}
 
-impl<T> TicketMutex<T> {
+impl<T, N: IN> TicketMutex<T, N> {
     #[inline(always)]
     pub const fn new(data: T) -> Self {
         TicketMutex {
+            phantom: PhantomData,
             next_ticket: AtomicUsize::new(0),
             next_serving: AtomicUsize::new(0),
             data: UnsafeCell::new(data),
@@ -50,15 +54,16 @@ impl<T> TicketMutex<T> {
     }
 }
 
-impl<T: ?Sized> TicketMutex<T> {
+impl<T: ?Sized, N: IN> TicketMutex<T, N> {
     #[inline(always)]
-    pub fn lock(&self) -> TicketMutexGuard<T> {
-        push_off();
+    pub fn lock(&self) -> TicketMutexGuard<T, N> {
+        N::push_off();
         let ticket = self.next_ticket.fetch_add(1, Ordering::Relaxed);
         while self.next_serving.load(Ordering::Acquire) != ticket {
             core::hint::spin_loop();
         }
         TicketMutexGuard {
+            phantom: PhantomData,
             next_serving: &self.next_serving,
             ticket,
             // Safety
@@ -72,8 +77,8 @@ impl<T: ?Sized> TicketMutex<T> {
     }
 
     #[inline(always)]
-    pub fn try_lock(&self) -> Option<TicketMutexGuard<T>> {
-        push_off();
+    pub fn try_lock(&self) -> Option<TicketMutexGuard<T, N>> {
+        N::push_off();
         let ticket = self
             .next_ticket
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |ticket| {
@@ -85,6 +90,7 @@ impl<T: ?Sized> TicketMutex<T> {
             });
         if let Ok(ticket) = ticket {
             Some(TicketMutexGuard {
+                phantom: PhantomData,
                 next_serving: &self.next_serving,
                 ticket,
                 // Safety
@@ -94,7 +100,7 @@ impl<T: ?Sized> TicketMutex<T> {
                 data: unsafe { &mut *self.data.get() },
             })
         } else {
-            pop_off();
+            N::pop_off();
             None
         }
     }
@@ -113,16 +119,16 @@ impl<T: ?Sized> TicketMutex<T> {
     }
 }
 
-impl<'a, T: ?Sized> Drop for TicketMutexGuard<'a, T> {
+impl<'a, T: ?Sized, N: IN> Drop for TicketMutexGuard<'a, T, N> {
     /// The dropping of the TicketMutexGuard will release the lock it was created from.
     fn drop(&mut self) {
         let new_ticket = self.ticket + 1;
         self.next_serving.store(new_ticket, Ordering::Release);
-        pop_off();
+        N::pop_off();
     }
 }
 
-impl<T: ?Sized + fmt::Debug> fmt::Debug for TicketMutex<T> {
+impl<T: ?Sized + fmt::Debug, N: IN> fmt::Debug for TicketMutex<T, N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.try_lock() {
             Some(guard) => write!(f, "Mutex {{ data: ")
@@ -133,38 +139,38 @@ impl<T: ?Sized + fmt::Debug> fmt::Debug for TicketMutex<T> {
     }
 }
 
-impl<T: ?Sized + Default> Default for TicketMutex<T> {
+impl<T: ?Sized + Default, N: IN> Default for TicketMutex<T, N> {
     fn default() -> Self {
-        TicketMutex::new(T::default())
+        TicketMutex::<T, N>::new(T::default())
     }
 }
 
-impl<T> From<T> for TicketMutex<T> {
+impl<T, N: IN> From<T> for TicketMutex<T, N> {
     fn from(data: T) -> Self {
         Self::new(data)
     }
 }
 
-impl<'a, T: ?Sized + fmt::Display> fmt::Display for TicketMutexGuard<'a, T> {
+impl<'a, T: ?Sized + fmt::Display, N: IN> fmt::Display for TicketMutexGuard<'a, T, N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&**self, f)
     }
 }
 
-impl<'a, T: ?Sized + fmt::Debug> fmt::Debug for TicketMutexGuard<'a, T> {
+impl<'a, T: ?Sized + fmt::Debug, N: IN> fmt::Debug for TicketMutexGuard<'a, T, N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
 
-impl<'a, T: ?Sized> Deref for TicketMutexGuard<'a, T> {
+impl<'a, T: ?Sized, N: IN> Deref for TicketMutexGuard<'a, T, N> {
     type Target = T;
     fn deref(&self) -> &T {
         self.data
     }
 }
 
-impl<'a, T: ?Sized> DerefMut for TicketMutexGuard<'a, T> {
+impl<'a, T: ?Sized, N: IN> DerefMut for TicketMutexGuard<'a, T, N> {
     fn deref_mut(&mut self) -> &mut T {
         self.data
     }

@@ -1,6 +1,5 @@
-use lock::future_mutex::FutureMutex as Mutex;
+use lock::future::mock::FutureMutex as Mutex;
 use std::{sync::Arc, vec};
-// use tokio::task::{yield_now, JoinSet};
 
 async fn handle1(x: Arc<Mutex<i32>>, loop_cnt: i32) {
     for _ in 0..loop_cnt {

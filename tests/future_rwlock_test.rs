@@ -1,9 +1,9 @@
 #![feature(async_closure)]
 
-use lock::future_rwlock::FutureRwLock as RwLock;
-use std::vec::Vec;
-use std::sync::Arc;
+use lock::future::mock::FutureRwLock as RwLock;
 use std::sync::mpsc::channel;
+use std::sync::Arc;
+use std::vec::Vec;
 use tokio::task::yield_now;
 
 #[tokio::test]

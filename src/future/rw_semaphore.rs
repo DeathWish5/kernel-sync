@@ -1,15 +1,16 @@
-use super::{Mutex, MutexGuard};
+use crate::spinlock::{Mutex, MutexGuard};
 
 use alloc::{collections::VecDeque, sync::Arc};
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use core::{
     future::Future,
+    marker::PhantomData,
     pin::Pin,
     result::Result,
     task::{Context, Poll, Waker},
 };
 
-use super::{pop_off, push_off};
+use crate::NestStrategy as IN;
 
 const READER: usize = 1 << 2;
 // const UPGRADED: usize = 1 << 1;
@@ -17,29 +18,31 @@ const WRITER: usize = 1;
 
 type AcquireResult = Result<(), ()>;
 
-pub(crate) struct RwSemaphore {
+pub struct RwSemaphore<N: IN> {
+    phantom: PhantomData<N>,
     permit: AtomicUsize,
-    waiters: Mutex<VecDeque<Arc<Waiter>>>,
+    waiters: Mutex<VecDeque<Arc<Waiter>>, N>,
     _closed: bool,
 }
 
-impl RwSemaphore {
+impl<N: IN> RwSemaphore<N> {
     pub fn new() -> Self {
         Self {
+            phantom: PhantomData,
             permit: AtomicUsize::new(0),
-            waiters: Mutex::new(VecDeque::new()),
+            waiters: Mutex::<VecDeque<Arc<Waiter>>, N>::new(VecDeque::new()),
             _closed: false,
         }
     }
 
-    pub fn acquire_read(&self) -> AcquireFuture<'_> {
+    pub fn acquire_read(&self) -> AcquireFuture<'_, N> {
         AcquireFuture {
             semaphore: self,
             node: Arc::new(Waiter::new(AcquireType::Read)),
         }
     }
 
-    pub fn acquire_write(&self) -> AcquireFuture<'_> {
+    pub fn acquire_write(&self) -> AcquireFuture<'_, N> {
         AcquireFuture {
             semaphore: self,
             node: Arc::new(Waiter::new(AcquireType::Write)),
@@ -47,11 +50,11 @@ impl RwSemaphore {
     }
 
     pub fn try_acquire_read(&self) -> AcquireResult {
-        push_off();
+        N::push_off();
         let value = self.permit.fetch_add(READER, Ordering::Acquire);
         if (value & WRITER) != 0 {
             self.permit.fetch_sub(READER, Ordering::Release);
-            pop_off();
+            N::pop_off();
             Err(())
         } else {
             Ok(())
@@ -59,7 +62,7 @@ impl RwSemaphore {
     }
 
     pub fn try_acquire_write(&self) -> AcquireResult {
-        push_off();
+        N::push_off();
         if self
             .permit
             .compare_exchange(0, WRITER, Ordering::Acquire, Ordering::Relaxed)
@@ -67,7 +70,7 @@ impl RwSemaphore {
         {
             Ok(())
         } else {
-            pop_off();
+            N::pop_off();
             Err(())
         }
     }
@@ -98,17 +101,17 @@ impl RwSemaphore {
         if old == READER {
             Self::wake_next(&mut waiters);
         }
-        pop_off();
+        N::pop_off();
     }
 
     pub fn release_write(&self) {
         let mut waiters = self.waiters.lock();
         self.permit.fetch_and(!WRITER, Ordering::Release);
         Self::wake_next(&mut waiters);
-        pop_off();
+        N::pop_off();
     }
 
-    fn wake_next(waiters: &mut MutexGuard<VecDeque<Arc<Waiter>>>) {
+    fn wake_next(waiters: &mut MutexGuard<VecDeque<Arc<Waiter>>, N>) {
         if !waiters.is_empty() {
             let waiter = waiters.pop_front().unwrap();
             waiter.wake();
@@ -145,12 +148,12 @@ enum AcquireType {
     Write,
 }
 
-pub(crate) struct AcquireFuture<'a> {
-    semaphore: &'a RwSemaphore,
+pub struct AcquireFuture<'a, N: IN> {
+    semaphore: &'a RwSemaphore<N>,
     node: Arc<Waiter>,
 }
 
-impl Future for AcquireFuture<'_> {
+impl<N: IN> Future for AcquireFuture<'_, N> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

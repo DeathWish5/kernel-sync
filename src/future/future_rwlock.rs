@@ -3,13 +3,15 @@ use crate::rw_semaphore::RwSemaphore as Semaphore;
 use core::{
     cell::UnsafeCell,
     fmt,
+    marker::PhantomData,
     ops::{Deref, DerefMut},
 };
 
-use super::{pop_off};
+use crate::NestStrategy as IN;
 
-pub struct FutureRwLock<T: ?Sized> {
-    lock: Semaphore,
+pub struct FutureRwLock<T: ?Sized, N: IN> {
+    phantom: PhantomData<N>,
+    lock: Semaphore<N>,
     data: UnsafeCell<T>,
 }
 
@@ -17,27 +19,30 @@ pub struct FutureRwLock<T: ?Sized> {
 ///
 /// When the guard falls out of scope it will decrement the read count,
 /// potentially releasing the lock.
-pub struct FutureRwLockReadGuard<'a, T: 'a + ?Sized> {
-    inner: &'a FutureRwLock<T>,
+pub struct FutureRwLockReadGuard<'a, T: 'a + ?Sized, N: IN> {
+    phantom: PhantomData<N>,
+    inner: &'a FutureRwLock<T, N>,
 }
 
 /// A guard that provides mutable data access.
 ///
 /// When the guard falls out of scope it will release the lock.
-pub struct FutureRwLockWriteGuard<'a, T: 'a + ?Sized> {
-    inner: &'a FutureRwLock<T>,
+pub struct FutureRwLockWriteGuard<'a, T: 'a + ?Sized, N: IN> {
+    phantom: PhantomData<N>,
+    inner: &'a FutureRwLock<T, N>,
     data: &'a mut T,
 }
 
 // Same unsafe impls as `std::sync::FutureRwLock`
-unsafe impl<T: ?Sized + Send> Send for FutureRwLock<T> {}
-unsafe impl<T: ?Sized + Send + Sync> Sync for FutureRwLock<T> {}
+unsafe impl<N: IN, T: ?Sized + Send> Send for FutureRwLock<T, N> {}
+unsafe impl<N: IN, T: ?Sized + Send + Sync> Sync for FutureRwLock<T, N> {}
 
-impl<T> FutureRwLock<T> {
+impl<T, N: IN> FutureRwLock<T, N> {
     #[inline]
     pub fn new(data: T) -> Self {
-        FutureRwLock {
-            lock: Semaphore::new(),
+        FutureRwLock::<T, N> {
+            phantom: PhantomData,
+            lock: Semaphore::<N>::new(),
             data: UnsafeCell::new(data),
         }
     }
@@ -57,26 +62,29 @@ impl<T> FutureRwLock<T> {
     }
 }
 
-impl<T: ?Sized> FutureRwLock<T> {
-    pub async fn read(&self) -> FutureRwLockReadGuard<'_, T> {
+impl<T: ?Sized, N: IN> FutureRwLock<T, N> {
+    pub async fn read(&self) -> FutureRwLockReadGuard<'_, T, N> {
         self.lock.acquire_read().await;
-        FutureRwLockReadGuard { 
+        FutureRwLockReadGuard {
+            phantom: PhantomData,
             inner: self,
         }
     }
 
-    pub async fn write(&self) -> FutureRwLockWriteGuard<'_, T> {
+    pub async fn write(&self) -> FutureRwLockWriteGuard<'_, T, N> {
         self.lock.acquire_write().await;
-        FutureRwLockWriteGuard { 
+        FutureRwLockWriteGuard {
+            phantom: PhantomData,
             inner: self,
             data: unsafe { &mut *self.data.get() },
         }
     }
 
     #[inline]
-    pub fn try_read(&self) -> Option<FutureRwLockReadGuard<T>> {
+    pub fn try_read(&self) -> Option<FutureRwLockReadGuard<T, N>> {
         if self.lock.try_acquire_read().is_ok() {
             Some(FutureRwLockReadGuard {
+                phantom: PhantomData,
                 inner: self,
             })
         } else {
@@ -84,7 +92,7 @@ impl<T: ?Sized> FutureRwLock<T> {
         }
     }
 
-    pub fn spin_read(&self) -> FutureRwLockReadGuard<T> {
+    pub fn spin_read(&self) -> FutureRwLockReadGuard<T, N> {
         loop {
             match self.try_read() {
                 Some(guard) => return guard,
@@ -94,9 +102,10 @@ impl<T: ?Sized> FutureRwLock<T> {
     }
 
     #[inline(always)]
-    fn try_write(&self) -> Option<FutureRwLockWriteGuard<T>> {
+    fn try_write(&self) -> Option<FutureRwLockWriteGuard<T, N>> {
         if self.lock.try_acquire_write().is_ok() {
             Some(FutureRwLockWriteGuard {
+                phantom: PhantomData,
                 inner: self,
                 data: unsafe { &mut *self.data.get() },
             })
@@ -105,7 +114,7 @@ impl<T: ?Sized> FutureRwLock<T> {
         }
     }
 
-    pub fn spin_write(&self) -> FutureRwLockWriteGuard<T> {
+    pub fn spin_write(&self) -> FutureRwLockWriteGuard<T, N> {
         loop {
             match self.try_write() {
                 Some(guard) => return guard,
@@ -129,7 +138,7 @@ impl<T: ?Sized> FutureRwLock<T> {
     }
 }
 
-impl<T: ?Sized + fmt::Debug> fmt::Debug for FutureRwLock<T> {
+impl<T: ?Sized + fmt::Debug, N: IN> fmt::Debug for FutureRwLock<T, N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.try_read() {
             Some(guard) => write!(f, "FutureRwLock {{ data: ")
@@ -140,62 +149,66 @@ impl<T: ?Sized + fmt::Debug> fmt::Debug for FutureRwLock<T> {
     }
 }
 
-impl<T: ?Sized + Default> Default for FutureRwLock<T> {
+impl<T: ?Sized + Default, N: IN> Default for FutureRwLock<T, N> {
     fn default() -> Self {
         Self::new(Default::default())
     }
 }
 
-impl<T> From<T> for FutureRwLock<T> {
+impl<T, N: IN> From<T> for FutureRwLock<T, N> {
     fn from(data: T) -> Self {
         Self::new(data)
     }
 }
 
-impl<'rwlock, T: ?Sized> FutureRwLockReadGuard<'rwlock, T> {
+impl<'rwlock, T: ?Sized, N: IN> FutureRwLockReadGuard<'rwlock, T, N> {
     #[inline]
     pub fn leak(this: Self) -> &'rwlock T {
-        pop_off();
-        let Self { inner } = this;
+        N::pop_off();
+        let Self { phantom, inner } = this;
         unsafe { &*inner.data.get() }
     }
 }
 
-impl<'rwlock, T: ?Sized + fmt::Debug> fmt::Debug for FutureRwLockReadGuard<'rwlock, T> {
+impl<'rwlock, T: ?Sized + fmt::Debug, N: IN> fmt::Debug for FutureRwLockReadGuard<'rwlock, T, N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
 
-impl<'rwlock, T: ?Sized + fmt::Display> fmt::Display for FutureRwLockReadGuard<'rwlock, T> {
+impl<'rwlock, T: ?Sized + fmt::Display, N: IN> fmt::Display
+    for FutureRwLockReadGuard<'rwlock, T, N>
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&**self, f)
     }
 }
 
-impl<'rwlock, T: ?Sized> FutureRwLockWriteGuard<'rwlock, T> {
+impl<'rwlock, T: ?Sized, N: IN> FutureRwLockWriteGuard<'rwlock, T, N> {
     #[inline]
     pub fn leak(this: Self) -> &'rwlock mut T {
-        pop_off();
+        N::pop_off();
         let data = this.data as *mut _; // Keep it in pointer form temporarily to avoid double-aliasing
         core::mem::forget(this);
         unsafe { &mut *data }
     }
 }
 
-impl<'rwlock, T: ?Sized + fmt::Debug> fmt::Debug for FutureRwLockWriteGuard<'rwlock, T> {
+impl<'rwlock, T: ?Sized + fmt::Debug, N: IN> fmt::Debug for FutureRwLockWriteGuard<'rwlock, T, N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
 
-impl<'rwlock, T: ?Sized + fmt::Display> fmt::Display for FutureRwLockWriteGuard<'rwlock, T> {
+impl<'rwlock, T: ?Sized + fmt::Display, N: IN> fmt::Display
+    for FutureRwLockWriteGuard<'rwlock, T, N>
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&**self, f)
     }
 }
 
-impl<'rwlock, T: ?Sized> Deref for FutureRwLockReadGuard<'rwlock, T> {
+impl<'rwlock, T: ?Sized, N: IN> Deref for FutureRwLockReadGuard<'rwlock, T, N> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -203,7 +216,7 @@ impl<'rwlock, T: ?Sized> Deref for FutureRwLockReadGuard<'rwlock, T> {
     }
 }
 
-impl<'rwlock, T: ?Sized> Deref for FutureRwLockWriteGuard<'rwlock, T> {
+impl<'rwlock, T: ?Sized, N: IN> Deref for FutureRwLockWriteGuard<'rwlock, T, N> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -211,19 +224,19 @@ impl<'rwlock, T: ?Sized> Deref for FutureRwLockWriteGuard<'rwlock, T> {
     }
 }
 
-impl<'rwlock, T: ?Sized> DerefMut for FutureRwLockWriteGuard<'rwlock, T> {
+impl<'rwlock, T: ?Sized, N: IN> DerefMut for FutureRwLockWriteGuard<'rwlock, T, N> {
     fn deref_mut(&mut self) -> &mut T {
         self.data
     }
 }
 
-impl<'rwlock, T: ?Sized> Drop for FutureRwLockReadGuard<'rwlock, T> {
+impl<'rwlock, T: ?Sized, N: IN> Drop for FutureRwLockReadGuard<'rwlock, T, N> {
     fn drop(&mut self) {
         self.inner.lock.release_read();
     }
 }
 
-impl<'rwlock, T: ?Sized> Drop for FutureRwLockWriteGuard<'rwlock, T> {
+impl<'rwlock, T: ?Sized, N: IN> Drop for FutureRwLockWriteGuard<'rwlock, T, N> {
     fn drop(&mut self) {
         self.inner.lock.release_write();
     }

@@ -1,4 +1,4 @@
-use lock::Mutex;
+use lock::spinlock::mock::{Mutex, RwLock};
 use std::{sync::Arc, vec};
 
 #[test]
