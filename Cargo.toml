@@ -25,8 +25,6 @@ riscv = "0.8"
 [target.'cfg(not(target_os = "none"))'.dependencies]
 spin = "0.9"
 
-[target.'cfg(feature = "async")'.dependencies]
-
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 lazy_static = "1.4"

@@ -165,7 +165,7 @@ impl<'rwlock, T: ?Sized, N: IN> FutureRwLockReadGuard<'rwlock, T, N> {
     #[inline]
     pub fn leak(this: Self) -> &'rwlock T {
         N::pop_off();
-        let Self { phantom, inner } = this;
+        let Self { phantom: _, inner } = this;
         unsafe { &*inner.data.get() }
     }
 }

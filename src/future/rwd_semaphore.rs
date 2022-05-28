@@ -12,20 +12,20 @@ use core::{
 
 use crate::NestStrategy as IN;
 
-const READER: usize = 1 << 2;
-// const UPGRADED: usize = 1 << 1;
-const WRITER: usize = 1;
+pub const READER: usize = 1 << 2;
+pub const WRITER: usize = 1 << 1;
+pub const DISK: usize = 1;
 
 type AcquireResult = Result<(), usize>;
 
-pub struct RwSemaphore<N: IN> {
+pub struct RwdSemaphore<N: IN> {
     phantom: PhantomData<N>,
     permit: AtomicUsize,
     waiters: Mutex<VecDeque<Arc<Waiter>>, N>,
     _closed: bool,
 }
 
-impl<N: IN> RwSemaphore<N> {
+impl<N: IN> RwdSemaphore<N> {
     pub fn new() -> Self {
         Self {
             phantom: PhantomData,
@@ -49,10 +49,17 @@ impl<N: IN> RwSemaphore<N> {
         }
     }
 
+    pub fn acquire_disk(&self) -> AcquireFuture<'_, N> {
+        AcquireFuture {
+            semaphore: self,
+            node: Arc::new(Waiter::new(AcquireType::Disk)),
+        }
+    }
+
     pub fn try_acquire_read(&self) -> AcquireResult {
         N::push_off();
         let value = self.permit.fetch_add(READER, Ordering::Acquire);
-        if (value & WRITER) != 0 {
+        if (value & (DISK | WRITER)) != 0 {
             self.permit.fetch_sub(READER, Ordering::Release);
             N::pop_off();
             Err(value)
@@ -75,13 +82,92 @@ impl<N: IN> RwSemaphore<N> {
         }
     }
 
+    pub fn try_acquire_disk(&self) -> AcquireResult {
+        N::push_off();
+        let value = self
+            .permit
+            .compare_exchange(0, DISK, Ordering::Acquire, Ordering::Relaxed);
+        match value {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                N::pop_off();
+                Err(err)
+            }
+        }
+    }
+
+    pub fn try_downgrade_read(&self, old: usize) -> AcquireResult {
+        debug_assert!(old == WRITER || old == DISK);
+        let value = self
+            .permit
+            .compare_exchange(old, READER, Ordering::Acquire, Ordering::Relaxed);
+        match value {
+            Ok(_) => {
+                let mut waiters = self.waiters.lock();
+                Self::wake_reader(&mut waiters);
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn try_downgrade_write(&self, old: usize) -> AcquireResult {
+        debug_assert!(old == DISK);
+        let value = self
+            .permit
+            .compare_exchange(old, WRITER, Ordering::Acquire, Ordering::Relaxed);
+        value.map(|_| ())
+    }
+
+    pub fn try_upgrade_disk(&self, old: usize) -> AcquireResult {
+        debug_assert!(old == WRITER || old == READER);
+        let value = self
+            .permit
+            .compare_exchange(old, DISK, Ordering::Acquire, Ordering::Relaxed);
+        value.map(|_| ())
+    }
+
+    pub fn try_upgrade_write(&self, old: usize) -> AcquireResult {
+        debug_assert!(old == READER);
+        let value = self
+            .permit
+            .compare_exchange(old, WRITER, Ordering::Acquire, Ordering::Relaxed);
+        value.map(|_| ())
+    }
+
+    pub fn spin_upgrade_disk(&self, old: usize) {
+        debug_assert!(old == READER);
+        loop {
+            if self.try_upgrade_disk(old).is_ok() {
+                return;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
+    pub fn spin_upgrade_write(&self, old: usize) {
+        debug_assert!(old == READER);
+        loop {
+            if self.try_upgrade_write(old).is_ok() {
+                return;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
     fn poll_acquire(&self, node: &Arc<Waiter>) -> AcquireResult {
         let mut waiters = self.waiters.lock();
         let req = node.req;
-        let res = if req == AcquireType::Read {
-            self.try_acquire_read()
-        } else {
-            self.try_acquire_write()
+        let res = loop {
+            let res = match req {
+                AcquireType::Read => self.try_acquire_read(),
+                AcquireType::Write => self.try_acquire_write(),
+                _ => self.try_acquire_disk(),
+            };
+            if res.is_ok() || Err(DISK) == res {
+                break res;
+            }
+            core::hint::spin_loop();
         };
         if res.is_err()
             && node
@@ -110,6 +196,13 @@ impl<N: IN> RwSemaphore<N> {
         N::pop_off();
     }
 
+    pub fn release_disk(&self) {
+        let mut waiters = self.waiters.lock();
+        self.permit.fetch_and(!DISK, Ordering::Release);
+        Self::wake_next(&mut waiters);
+        N::pop_off();
+    }
+
     fn wake_next(waiters: &mut MutexGuard<VecDeque<Arc<Waiter>>, N>) {
         if !waiters.is_empty() {
             let waiter = waiters.pop_front().unwrap();
@@ -127,6 +220,17 @@ impl<N: IN> RwSemaphore<N> {
         }
     }
 
+    fn wake_reader(waiters: &mut MutexGuard<VecDeque<Arc<Waiter>>, N>) {
+        waiters.retain(|waiter| {
+            if waiter.req == AcquireType::Read {
+                waiter.wake();
+                false
+            } else {
+                true
+            }
+        });
+    }
+
     pub fn reader_count(&self) -> usize {
         let state = self.permit.load(Ordering::Relaxed);
         state / READER
@@ -136,12 +240,16 @@ impl<N: IN> RwSemaphore<N> {
         (self.permit.load(Ordering::Relaxed) & WRITER) / WRITER
     }
 
+    pub fn disk_count(&self) -> usize {
+        (self.permit.load(Ordering::Relaxed) & DISK) / DISK
+    }
+
     pub fn get_permit(&self) -> usize {
         self.permit.load(Ordering::Relaxed)
     }
 }
 
-impl<N: IN> Default for RwSemaphore<N> {
+impl<N: IN> Default for RwdSemaphore<N> {
     fn default() -> Self {
         Self::new()
     }
@@ -150,11 +258,12 @@ impl<N: IN> Default for RwSemaphore<N> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AcquireType {
     Read = 0,
-    Write,
+    Write = 1,
+    Disk = 2,
 }
 
 pub struct AcquireFuture<'a, N: IN> {
-    semaphore: &'a RwSemaphore<N>,
+    semaphore: &'a RwdSemaphore<N>,
     node: Arc<Waiter>,
 }
 

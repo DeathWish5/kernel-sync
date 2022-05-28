@@ -1,5 +1,7 @@
 #![no_std]
 #![feature(get_mut_unchecked)]
+#![feature(unwrap_infallible)]
+#![feature(never_type)]
 
 extern crate alloc;
 
