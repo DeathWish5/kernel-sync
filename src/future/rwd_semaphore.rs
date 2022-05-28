@@ -135,24 +135,41 @@ impl<N: IN> RwdSemaphore<N> {
         value.map(|_| ())
     }
 
-    pub fn spin_upgrade_disk(&self, old: usize) {
-        debug_assert!(old == READER);
-        loop {
-            if self.try_upgrade_disk(old).is_ok() {
-                return;
-            }
-            core::hint::spin_loop();
+    fn read_upgrade(&self, new: usize) -> AcquireResult {
+        let value = self
+            .permit
+            .fetch_update(Ordering::Acquire, Ordering::Relaxed, |value| {
+                if value & (WRITER | DISK) == 0 {
+                    Some(value | new)
+                } else {
+                    None
+                }
+            });
+        match value {
+            Ok(_) => loop {
+                let value = self.permit.compare_exchange(
+                    READER | new,
+                    new,
+                    Ordering::Acquire,
+                    Ordering::Relaxed,
+                );
+                match value {
+                    Ok(_) => break Ok(()),
+                    Err(_) => core::hint::spin_loop(),
+                }
+            },
+            Err(err) => Err(err),
         }
     }
 
-    pub fn spin_upgrade_write(&self, old: usize) {
+    pub fn read_upgrade_write(&self, old: usize) -> AcquireResult {
         debug_assert!(old == READER);
-        loop {
-            if self.try_upgrade_write(old).is_ok() {
-                return;
-            }
-            core::hint::spin_loop();
-        }
+        self.read_upgrade(WRITER)
+    }
+
+    pub fn read_upgrade_disk(&self, old: usize) -> AcquireResult {
+        debug_assert!(old == READER);
+        self.read_upgrade(DISK)
     }
 
     fn poll_acquire(&self, node: &Arc<Waiter>) -> AcquireResult {

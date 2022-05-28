@@ -121,7 +121,7 @@ impl<T: ?Sized, N: IN> FutureRwdLock<T, N> {
     }
 
     #[inline(always)]
-    fn try_write(&self) -> Option<FutureRwdLockWriteGuard<T, N>> {
+    pub fn try_write(&self) -> Option<FutureRwdLockWriteGuard<T, N>> {
         if self.lock.try_acquire_write().is_ok() {
             Some(FutureRwdLockWriteGuard {
                 phantom: PhantomData,
@@ -143,7 +143,7 @@ impl<T: ?Sized, N: IN> FutureRwdLock<T, N> {
     }
 
     #[inline(always)]
-    fn try_disk(&self) -> Option<FutureRwdLockDiskGuard<T, N>> {
+    pub fn try_disk(&self) -> Option<FutureRwdLockDiskGuard<T, N>> {
         if self.lock.try_acquire_disk().is_ok() {
             Some(FutureRwdLockDiskGuard {
                 phantom: PhantomData,
@@ -230,25 +230,31 @@ impl<'rwlock, T: ?Sized, N: IN> FutureRwdLockWriteGuard<'rwlock, T, N> {
 }
 
 impl<'rwlock, T: ?Sized, N: IN> FutureRwdLockReadGuard<'rwlock, T, N> {
-    pub fn spin_upgrade_disk(self) -> FutureRwdLockDiskGuard<'rwlock, T, N> {
-        let inner = self.inner;
-        mem::forget(self);
-        inner.lock.spin_upgrade_disk(READER);
-        FutureRwdLockDiskGuard {
-            phantom: PhantomData,
-            inner,
-            data: unsafe { &mut *inner.data.get() },
+    pub fn try_upgrade_disk(self) -> Result<FutureRwdLockDiskGuard<'rwlock, T, N>, Self> {
+        if self.inner.lock.read_upgrade_disk(READER).is_ok() {
+            let inner = self.inner;
+            mem::forget(self);
+            Ok(FutureRwdLockDiskGuard {
+                phantom: PhantomData,
+                inner,
+                data: unsafe { &mut *inner.data.get() },
+            })
+        } else {
+            Err(self)
         }
     }
 
-    pub fn spin_upgrade_write(self) -> FutureRwdLockWriteGuard<'rwlock, T, N> {
-        let inner = self.inner;
-        mem::forget(self);
-        inner.lock.spin_upgrade_write(READER);
-        FutureRwdLockWriteGuard {
-            phantom: PhantomData,
-            inner,
-            data: unsafe { &mut *inner.data.get() },
+    pub fn try_upgrade_write(self) -> Result<FutureRwdLockWriteGuard<'rwlock, T, N>, Self> {
+        if self.inner.lock.read_upgrade_write(READER).is_ok() {
+            let inner = self.inner;
+            mem::forget(self);
+            Ok(FutureRwdLockWriteGuard {
+                phantom: PhantomData,
+                inner,
+                data: unsafe { &mut *inner.data.get() },
+            })
+        } else {
+            Err(self)
         }
     }
 }
